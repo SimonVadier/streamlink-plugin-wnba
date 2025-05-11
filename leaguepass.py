@@ -26,10 +26,11 @@ log = logging.getLogger(__name__)
     help="Password for League Pass authentication",
 )
 class LeaguePass(Plugin):
-    login_url = "https://dce-frontoffice.imggaming.com/api/v2/login"
-    api_base = "https://dce-frontoffice.imggaming.com/api/v4"
-    live_info_url = f"{api_base}/event/{{id}}"
-    vod_info_url = f"{api_base}/vod/{{id}}"
+    base_url = "https://dce-frontoffice.imggaming.com/api"
+    init_url = f"{base_url}/v1/init"
+    login_url = f"{base_url}/v2/login"
+    live_info_url = f"{base_url}/v4/event/{{id}}"
+    vod_info_url = f"{base_url}/v4/vod/{{id}}"
 
     app_js_url_re = re.compile(
         r"""<script[^>]*src="([^"]*app\.[^"]*\.js)"[^>]*></script>"""
@@ -37,8 +38,17 @@ class LeaguePass(Plugin):
     app_api_key_re = re.compile(r'''API_KEY:\s*"([\w\-]+)"''')
     app_output_folder_re = re.compile(r'''OUTPUT_FOLDER:\s*"([\w\.\-]+)"''')
 
+    _init_schema = validate.Schema(
+        {
+            "authentication": {
+                "authorisationToken": str,
+            },
+        }
+    )
     _login_schema = validate.Schema({"authorisationToken": str})
-    _info_schema = validate.Schema({"playerUrlCallback": validate.url()})
+    _info_schema = validate.Schema(
+        {validate.optional("playerUrlCallback"): validate.url(), "accessLevel": str}
+    )
     _stream_schema = validate.Schema({"hlsUrl": validate.url()})
     _vod_schema = validate.Schema({"hls": [{"url": validate.url()}]})
 
@@ -49,13 +59,6 @@ class LeaguePass(Plugin):
         self.isLive = self.match["type"] == "live"
         if not self.video_id:
             raise PluginError("Could not find video ID in URL")
-
-        self.session.http.headers.update(
-            {
-                "Authorization": "",
-                "Realm": "dce.wnba",
-            }
-        )
 
     def _init_api_headers(self):
         res = self.session.http.get(self.url)
@@ -78,27 +81,35 @@ class LeaguePass(Plugin):
 
         self.session.http.headers.update(
             {
+                "Realm": "dce.wnba",
                 "X-Api-Key": api_key.group(1),
                 "X-App-Var": output_folder.group(1),
             }
         )
 
-    def _authenticate(self):
-        email = self.get_option("email")
-        password = self.get_option("password")
-        if not email or not password:
-            log.error("Email and password are required for authentication")
-            return None
+        init_res = self.session.http.get(self.init_url)
+        init_data = self.session.http.json(init_res, schema=self._init_schema)
+        if not init_data:
+            raise PluginError("Could not find init data")
 
+        auth_token = init_data["authentication"]["authorisationToken"]
+
+        self.session.http.headers.update(
+            {
+                "Authorization": f"Bearer {auth_token}",
+            }
+        )
+
+    def _get_access_token(self):
+        res = self.session.http.get(self.init_url)
+        init_data = self.session.http.json(res, schema=self._init_schema)
+        return init_data["authentication"]["authorisationToken"]
+
+    def _authenticate(self, email, password):
         payload = {"id": email, "secret": password}
-
         res = self.session.http.post(self.login_url, json=payload)
-        token_data = self.session.http.json(res, schema=self._login_schema)
-        token = token_data.get("authorisationToken")
-        if not token:
-            return None
-        self.session.http.headers.update({"Authorization": f"Bearer {token}"})
-        return token
+        login_data = self.session.http.json(res, schema=self._login_schema)
+        return login_data["authorisationToken"]
 
     def _get_info(self):
         url = self.live_info_url if self.isLive else self.vod_info_url
@@ -127,9 +138,20 @@ class LeaguePass(Plugin):
 
     def _get_streams(self):
         self._init_api_headers()
-        self._authenticate()
+
+        email = self.get_option("email")
+        password = self.get_option("password")
+        token = None
+        if email and password:
+            token = self._authenticate(email=email, password=password)
+        else:
+            token = self._get_access_token()
+
+        self.session.http.headers.update({"Authorization": f"Bearer {token}"})
 
         info_data = self._get_info()
+        if info_data["accessLevel"] != "GRANTED":
+            raise PluginError("Access denied. Please check your credentials.")
         info_url = info_data["playerUrlCallback"]
 
         hls_url = None

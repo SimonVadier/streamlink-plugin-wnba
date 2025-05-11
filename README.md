@@ -14,14 +14,24 @@ This plugin allows you to stream video content from [WNBA League Pass](https://l
 
 ## Usage
 
+### Free Content
+
+Some VOD and streams are available without authentication:
+
+`streamlink "https://leaguepass.wnba.com/video/12345" best`
+
+### Authenticated Content
+
+For content requiring a WNBA League Pass subscription:
+
 `streamlink --leaguepass-email YOUR_EMAIL --leaguepass-password YOUR_PASSWORD "https://leaguepass.wnba.com/live/12345" best`
 
 ### Parameters
 
 | Parameter | Description |
 |-----------|-------------|
-| `--leaguepass-email` | Your WNBA League Pass account email |
-| `--leaguepass-password` | Your WNBA League Pass account password |
+| `--leaguepass-email` | Your WNBA League Pass account email (only required for subscription content) |
+| `--leaguepass-password` | Your WNBA League Pass account password (only required for subscription content) |
 
 ## Supported URLs
 
